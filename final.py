@@ -1,13 +1,14 @@
-import xml.etree.ElementTree as ET 
+import xml.etree.ElementTree as ET
 import csv
 import os
+import mysql.connector
 
 # === CASE 1 FUNCTIONS ===
 
 XML_FOLDER = r"C:\Users\user\Desktop\xmls_files1"
 
 def parse_xml_with_lines(file_path):
-    lines_by_path = {}
+    elements = {}
     parser = ET.iterparse(file_path, events=("start",))
     path_stack = []
 
@@ -17,54 +18,53 @@ def parse_xml_with_lines(file_path):
     for event, elem in parser:
         path_stack.append(elem.tag)
         path = "/" + "/".join(path_stack)
-        lines_by_path[path] = {
-            "attrib": dict(elem.attrib),
-            "text": (elem.text or "").strip(),
-            "line": find_line_with_tag(elem.tag, all_lines)
-        }
+
+        if path not in elements:
+            elements[path] = {
+                "attrib": dict(elem.attrib),
+                "text": (elem.text or "").strip()
+            }
+
         path_stack.pop()
 
-    return lines_by_path
+    return elements
 
-def find_line_with_tag(tag, lines):
-    for line in lines:
-        if f"<{tag}" in line or f"</{tag}>" in line:
-            return line.strip()
-    return ""
-
-def compare_xml_with_lines(good, bad):
+def compare_xml_elements(good, bad):
     differences = []
 
     for key in good:
         if key not in bad:
-            
-            differences.append(("-", "Tag missing", good[key]['line'], "-"))
+            good_text = f"<{key.split('/')[-1]}>{good[key]['text']}</{key.split('/')[-1]}>"
+            differences.append(("-", "Tag missing", good_text, "-"))
         else:
             for attr in good[key]['attrib']:
-                if attr not in bad[key]['attrib']:
-                    differences.append((attr, "Attribute missing", good[key]['attrib'][attr], "-"))
-                elif good[key]['attrib'][attr] != bad[key]['attrib'][attr]:
-                    differences.append((attr, "Attribute mismatch", good[key]['attrib'][attr], bad[key]['attrib'][attr]))
+                good_val = good[key]['attrib'][attr]
+                bad_val = bad[key]['attrib'].get(attr)
+                if bad_val is None:
+                    differences.append((attr, "Attribute missing", good_val, "-"))
+                elif good_val != bad_val:
+                    differences.append((attr, "Attribute mismatch", good_val, bad_val))
 
-            if good[key]['text'] != bad[key]['text']:
-                differences.append(("(text)", "Text mismatch", good[key]['text'], bad[key]['text']))
+            good_text = good[key]['text']
+            bad_text = bad[key]['text']
+            if good_text != bad_text:
+                differences.append(("(text)", "Text mismatch", good_text, bad_text))
 
     for key in bad:
         if key not in good:
-        
-            differences.append(("-", "Extra tag", "-", bad[key]['line']))
+            bad_text = f"<{key.split('/')[-1]}>{bad[key]['text']}</{key.split('/')[-1]}>"
+            differences.append(("-", "Extra tag", "-", bad_text))
 
     return differences
 
-def write_combined_differences_no_orderpair(all_differences, output_csv_file):
-    fieldnames = ["attribute", "difference type", "wcs value", "microservice value"]
+def write_case1_csv(differences, output_csv_file):
     with open(output_csv_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(fieldnames)
-        for row in all_differences:
+        writer.writerow(["attribute", "difference type", "wcs value", "microservice value"])
+        for row in differences:
             writer.writerow(row)
 
-def process_all_pairs_case1_no_orderpair(input_csv_file, output_csv_file):
+def process_all_pairs_case1(input_csv_file, output_csv_file):
     all_differences = []
 
     with open(input_csv_file, "r", encoding="utf-8") as f:
@@ -85,14 +85,127 @@ def process_all_pairs_case1_no_orderpair(input_csv_file, output_csv_file):
             try:
                 good_elements = parse_xml_with_lines(good_path)
                 bad_elements = parse_xml_with_lines(bad_path)
-                diffs = compare_xml_with_lines(good_elements, bad_elements)
-
+                diffs = compare_xml_elements(good_elements, bad_elements)
                 all_differences.extend(diffs)
             except Exception as e:
-                print(f" Error comparing {good_file} vs {bad_file}: {e}")
+                print(f"Error comparing {good_file} vs {bad_file}: {e}")
 
-    write_combined_differences_no_orderpair(all_differences, output_csv_file)
-    print(f"\n All differences written to: {output_csv_file}")
+    write_case1_csv(all_differences, output_csv_file)
+    print(f"\n Differences written to: {output_csv_file}")
+
+
+# === CASE 2 FUNCTIONS ===
+
+def get_xml_by_order_id(connection, order_id):
+    try:
+        cursor = connection.cursor()
+        query = "SELECT xml_content FROM orders WHERE order_id = %s"
+        cursor.execute(query, (order_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except mysql.connector.Error as e:
+        print(f"MySQL error fetching order_id {order_id}: {e}")
+        return None
+
+def parse_xml_from_string(xml_string):
+    try:
+        root = ET.fromstring(xml_string)
+        return root, None
+    except ET.ParseError as e:
+        return None, f"XML ParseError: {e}"
+
+def flatten_elements(root):
+    elements = {}
+    def recurse(element, path=""):
+        new_path = f"{path}/{element.tag}" if path else f"/{element.tag}"
+        if new_path not in elements:
+            elements[new_path] = {
+                "attrib": element.attrib,
+                "text": (element.text or "").strip()
+            }
+        for child in element:
+            recurse(child, new_path)
+    recurse(root)
+    return elements
+
+def compare_xml_elements_dict(good_elements, bad_elements):
+    differences = []
+
+    for key in good_elements:
+        if key not in bad_elements:
+            good_text = f"<{key.split('/')[-1]}>{good_elements[key]['text']}</{key.split('/')[-1]}>"
+            differences.append(("-", "Tag missing", good_text, "-"))
+        else:
+            good_attribs = good_elements[key]["attrib"]
+            bad_attribs = bad_elements[key]["attrib"]
+
+            for attr in good_attribs:
+                good_val = good_attribs[attr]
+                bad_val = bad_attribs.get(attr)
+                if bad_val is None:
+                    differences.append((attr, "Attribute missing", good_val, "-"))
+                elif good_val != bad_val:
+                    differences.append((attr, "Attribute mismatch", good_val, bad_val))
+
+            good_text = good_elements[key]["text"]
+            bad_text = bad_elements[key]["text"]
+            if good_text != bad_text:
+                differences.append(("(text)", "Text mismatch", good_text, bad_text))
+
+    for key in bad_elements:
+        if key not in good_elements:
+            bad_text = f"<{key.split('/')[-1]}>{bad_elements[key]['text']}</{key.split('/')[-1]}>"
+            differences.append(("-", "Extra tag", "-", bad_text))
+
+    return differences
+
+def write_case2_csv(differences, output_csv_file):
+    with open(output_csv_file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["attribute", "difference type", "wcs value", "microservice value"])
+        for row in differences:
+            writer.writerow(row)
+
+def read_order_pairs(csv_filename):
+    with open(csv_filename, newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        return [(row['wcs_order_id'], row['micro_order_id']) for row in reader]
+
+def process_all_pairs_case2(output_csv_file):
+    connection = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="KONOHA777",
+        database="checks"
+    )
+
+    order_pairs = read_order_pairs("orders_to_compare.csv")
+    all_differences = []
+
+    for wcs_id, micro_id in order_pairs:
+        wcs_xml = get_xml_by_order_id(connection, wcs_id)
+        micro_xml = get_xml_by_order_id(connection, micro_id)
+
+        if not wcs_xml or not micro_xml:
+            print(f" Missing XML for pair: {wcs_id}, {micro_id}")
+            continue
+
+        wcs_root, wcs_err = parse_xml_from_string(wcs_xml)
+        micro_root, micro_err = parse_xml_from_string(micro_xml)
+
+        if wcs_err or micro_err:
+            print(f" Parse error for pair: {wcs_id}-{micro_id}")
+            continue
+
+        wcs_elements = flatten_elements(wcs_root)
+        micro_elements = flatten_elements(micro_root)
+
+        diffs = compare_xml_elements_dict(wcs_elements, micro_elements)
+        all_differences.extend(diffs)
+
+    connection.close()
+    write_case2_csv(all_differences, output_csv_file)
+    print(f"\n Differences written to: {output_csv_file}")
 
 
 # === MAIN SWITCH ===
@@ -100,14 +213,18 @@ def process_all_pairs_case1_no_orderpair(input_csv_file, output_csv_file):
 def main():
     print("Select option:")
     print("1 - Compare XML files from folder using CSV filenames (Case 1)")
-    choice = input("Enter 1: ").strip()
+    print("2 - Compare XMLs from MySQL DB using CSV order IDs (Case 2)")
+    choice = input("Enter 1 or 2: ").strip()
 
     if choice == "1":
-        input_csv = "input.csv"  
-        output_csv = "all_differences.csv"
-        process_all_pairs_case1_no_orderpair(input_csv, output_csv)
+        input_csv = "input.csv"  # CSV with good_xml, bad_xml
+        output_csv = "all_differences_case1.csv"
+        process_all_pairs_case1(input_csv, output_csv)
+    elif choice == "2":
+        output_csv = "all_differences_case2.csv"
+        process_all_pairs_case2(output_csv)
     else:
-        print("Invalid choice or option not implemented. Exiting.")
+        print("Invalid choice. Exiting.")
 
 if __name__ == "__main__":
     main()
