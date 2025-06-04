@@ -15,14 +15,14 @@ def load_excluded_attributes(file_path=EXCLUDED_ATTRIBUTES_FILE):
         with open(file_path, newline='', encoding="utf-8") as csvfile:
             reader = csv.DictReader(csvfile)
             if not reader.fieldnames or 'attribute' not in reader.fieldnames:
-                print(f"⚠️ Invalid or missing 'attribute' column in: {file_path}")
+                print(f"Invalid or missing 'attribute' column in: {file_path}")
                 return excluded
             for row in reader:
                 attr = row['attribute'].strip()
                 if attr:
                     excluded.add(attr)
     except FileNotFoundError:
-        print(f"⚠️ Excluded attribute file not found: {file_path}")
+        print(f" Excluded attribute file not found: {file_path}")
     return excluded
 
 
@@ -108,7 +108,7 @@ def process_all_pairs_case1(input_csv_file, output_csv_file):
                 print(f"Error comparing {good_file} vs {bad_file}: {e}")
 
     write_case1_csv(all_differences, output_csv_file)
-    print(f"\n ✅ Differences written to: {output_csv_file}")
+    print(f"\n Differences written to: {output_csv_file}")
 
 
 # === CASE 2: MySQL XML comparison ===
@@ -222,7 +222,7 @@ def process_all_pairs_case2(output_csv_file):
 
     connection.close()
     write_case2_csv(all_differences, output_csv_file)
-    print(f"\n ✅ Differences written to: {output_csv_file}")
+    print(f"\nDiff erences written to: {output_csv_file}")
 
 
 # === MAIN SWITCH ===
